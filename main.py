@@ -46,7 +46,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Strictly ignore if message is from another bot
     if update.message.from_user.is_bot:
         return ConversationHandler.END
 
@@ -62,7 +61,6 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_file = await context.bot.get_file(audio_file.file_id)
     await tg_file.download_to_drive(file_path)
 
-    # Unique chat-based storage to support multiple members inside a GC seamlessly
     context.user_data["file_path"] = file_path
     context.user_data["ext"] = ext
     context.user_data["original_msg_id"] = update.message.message_id
@@ -73,7 +71,6 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return GET_TITLE
 
 async def get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Verify the text is from the same user who sent the audio
     if update.message.from_user.id != context.user_data.get("active_user_id"):
         return GET_TITLE
         
@@ -174,21 +171,20 @@ async def post_init(application: Application) -> None:
     menu_desc = f"{style_text('Check I Am Alive')}"
     await application.bot.set_my_commands([BotCommand("start", menu_desc)])
 
-def main():
+async def start_bot():
+    """
+    Asynchronous runner config for stable deployment under Python 3.13 environments
+    """
     app = Application.builder().token(TOKEN).post_init(post_init).build()
     
     conv_handler = ConversationHandler(
-        entry_points=[
-            # Filters.AUDIO triggers globally whenever any human member uploads a music file
-            MessageHandler(filters.AUDIO & ~filters.User(boot=True), handle_audio)
-        ],
+        entry_points=[MessageHandler(filters.AUDIO, handle_audio)],
         states={
             GET_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_title)],
             GET_ARTIST: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_artist)],
             GET_COVER: [MessageHandler(filters.PHOTO, get_cover_photo), MessageHandler(filters.TEXT, skip_cover)],
         },
         fallbacks=[CommandHandler("start", start)],
-        # per_chat=True helps running the flow inside public group chats without session crashes
         per_chat=True,
         per_user=False,
         allow_reentry=True
@@ -196,7 +192,19 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv_handler)
     
-    app.run_polling()
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    
+    # Keeping the background script loop up infinitely 24/7
+    while True:
+        await asyncio.sleep(3600)
+
+def main():
+    try:
+        asyncio.run(start_bot())
+    except (KeyboardInterrupt, SystemExit):
+        pass
 
 if __name__ == "__main__":
     main()
