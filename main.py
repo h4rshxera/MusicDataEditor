@@ -3,11 +3,12 @@ import asyncio
 import mutagen
 from mutagen.id3 import ID3, APIC, TIT2, TPE1
 from mutagen.mp4 import MP4, MP4Cover
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, BotCommand
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ConversationHandler,
     filters,
     ContextTypes
@@ -35,6 +36,11 @@ def style_text(text: str) -> str:
         styled_words.append(f"{first_letter}{remaining_letters}")
     return " ".join(styled_words)
 
+# Inline Cancel Button Markup
+def get_cancel_inline_markup():
+    keyboard = [[InlineKeyboardButton(f"❌ {style_text('Cancel Process')}", callback_data="inline_cancel")]]
+    return InlineKeyboardMarkup(keyboard)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message and update.message.text:
         welcome_text = (
@@ -43,6 +49,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{style_text('all rights reserved.')}"
         )
         await update.message.reply_text(welcome_text, reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handles both /cancel command and Inline Cancel Button click globally.
+    """
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        await query.edit_message_text(f"❌ {style_text('Process cancelled successfully.')}")
+    elif update.message:
+        await update.message.reply_text(
+            f"❌ {style_text('Process cancelled successfully.')}", 
+            reply_markup=ReplyKeyboardRemove()
+        )
+    
+    # Cache and files cleanup
+    file_path = context.user_data.get("file_path")
+    cover_path = context.user_data.get("cover_path")
+    if file_path and os.path.exists(file_path): os.remove(file_path)
+    if cover_path and os.path.exists(cover_path): os.remove(cover_path)
+    context.user_data.clear()
+    
     return ConversationHandler.END
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -67,7 +96,10 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["active_user_id"] = update.message.from_user.id
     context.user_data["cover_path"] = None
 
-    await status_msg.edit_text(f"📝 {style_text('Done! Send the New Title:')}")
+    await status_msg.edit_text(
+        f"📝 {style_text('Done! Send the New Title:')}",
+        reply_markup=get_cancel_inline_markup()
+    )
     return GET_TITLE
 
 async def get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -78,7 +110,10 @@ async def get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return GET_TITLE
         
     context.user_data["title"] = update.message.text
-    await update.message.reply_text(f"👤 {style_text('Send the Artist Name:')}")
+    await update.message.reply_text(
+        f"👤 {style_text('Send the Artist Name:')}",
+        reply_markup=get_cancel_inline_markup()
+    )
     return GET_ARTIST
 
 async def get_artist(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -94,7 +129,10 @@ async def get_artist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_keyboard = [[skip_button_text]]
     markup = ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True)
     
-    await update.message.reply_text(f"🖼️ {style_text('Send a Cover Photo or tap skip.')}", reply_markup=markup)
+    await update.message.reply_text(
+        f"🖼️ {style_text('Send a Cover Photo, tap skip button below or tap /cancel.')}", 
+        reply_markup=markup
+    )
     return GET_COVER
 
 async def process_and_upload(update: Update, context: ContextTypes.DEFAULT_TYPE, download_cover=False):
@@ -169,32 +207,54 @@ async def skip_cover(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(application: Application) -> None:
     """
-    Sets up the persistent menu command description globally.
+    Sets up the persistent menu command descriptions globally.
     """
-    menu_desc = f"{style_text('Check I Am Alive')}"
-    await application.bot.set_my_commands([BotCommand("start", menu_desc)])
+    commands = [
+        BotCommand("start", f"{style_text('Check I Am Alive')}"),
+        BotCommand("cancel", f"{style_text('Cancel Current Editing Process')}")
+    ]
+    await application.bot.set_my_commands(commands)
 
 def main():
-    # Native building workflow supporting asynchronous environments seamlessly
+    # Console notification print
+    print("Bot running \nRegd @RcHarsh")
+
     app = Application.builder().token(TOKEN).post_init(post_init).build()
     
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.AUDIO, handle_audio)],
         states={
-            GET_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_title)],
-            GET_ARTIST: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_artist)],
-            GET_COVER: [MessageHandler(filters.PHOTO, get_cover_photo), MessageHandler(filters.TEXT, skip_cover)],
+            GET_TITLE: [
+                CommandHandler("cancel", cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_title)
+            ],
+            GET_ARTIST: [
+                CommandHandler("cancel", cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_artist)
+            ],
+            GET_COVER: [
+                CommandHandler("cancel", cancel),
+                MessageHandler(filters.PHOTO, get_cover_photo), 
+                MessageHandler(filters.TEXT & ~filters.COMMAND, skip_cover)
+            ],
         },
-        fallbacks=[CommandHandler("start", start)],
+        fallbacks=[
+            CommandHandler("cancel", cancel), 
+            CommandHandler("start", start)
+        ],
         per_chat=True,
         per_user=False,
         allow_reentry=True
     )
     
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("cancel", cancel))
+    
+    # GLOBAL CALLBACK QUERY HANDLER: Yeh binary clicks ko track karega bina warning triggers ke!
+    app.add_handler(CallbackQueryHandler(cancel, pattern="^inline_cancel$"))
+    
     app.add_handler(conv_handler)
     
-    # Standard non-blocking application running method
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
