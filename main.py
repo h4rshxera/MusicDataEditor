@@ -168,13 +168,14 @@ async def skip_cover(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await process_and_upload(update, context, download_cover=False)
 
 async def post_init(application: Application) -> None:
+    """
+    Sets up the persistent menu command description globally.
+    """
     menu_desc = f"{style_text('Check I Am Alive')}"
     await application.bot.set_my_commands([BotCommand("start", menu_desc)])
 
-async def start_bot():
-    """
-    Asynchronous runner config for stable deployment under Python 3.13 environments
-    """
+def main():
+    # Native building workflow supporting asynchronous environments seamlessly
     app = Application.builder().token(TOKEN).post_init(post_init).build()
     
     conv_handler = ConversationHandler(
@@ -189,22 +190,12 @@ async def start_bot():
         per_user=False,
         allow_reentry=True
     )
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv_handler)
     
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling()
-    
-    # Keeping the background script loop up infinitely 24/7
-    while True:
-        await asyncio.sleep(3600)
-
-def main():
-    try:
-        asyncio.run(start_bot())
-    except (KeyboardInterrupt, SystemExit):
-        pass
+    # Standard non-blocking application running method
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
